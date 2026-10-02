@@ -1,0 +1,17 @@
+{
+  "name": "lostfound",
+  "version": "1.0.0",
+  "private": true,
+  "description": "拾光寻物 · 校园寻物启事 / 失物招领网站（简约毛玻璃风格）",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:web\"",
+    "dev:server": "cd server && npm run dev",
+    "dev:web": "cd web && npm run dev",
+    "install:all": "cd server && npm install && cd ../web && npm install",
+    "build": "cd web && npm run build",
+    "start": "cd server && npm start"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

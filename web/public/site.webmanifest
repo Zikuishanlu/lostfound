@@ -1,0 +1,16 @@
+{
+  "name": "拾光寻物",
+  "short_name": "拾光寻物",
+  "description": "校园失物招领与寻物启事平台",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#eef2ff",
+  "theme_color": "#6366f1",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

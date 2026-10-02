@@ -1,0 +1,27 @@
+services:
+  lostfound:
+    build: .
+    container_name: lostfound
+    restart: unless-stopped
+    ports:
+      # Web / API 端口：1Panel 网站反向代理到 http://127.0.0.1:3011
+      - "3011:3000"
+      # SnowLuma 反向 WebSocket 监听端口（管理后台可改，改后同步改这里）
+      # 若 SnowLuma 与本容器在同一个 docker 网络中，可删除该映射，改用 ws://lostfound:3002
+      - "3002:3002"
+    environment:
+      - PORT=3000
+      # ↓↓↓ 部署前请逐项修改 ↓↓↓
+      - SESSION_SECRET=please-change-me-to-a-long-random-string
+      - CAMPUX_BASE_URL=https://campux.example.com
+      - CAMPUX_CLIENT_ID=your-client-id
+      - CAMPUX_CLIENT_SECRET=your-client-secret
+      - CAMPUX_REDIRECT_URI=https://lostfound.example.com/api/auth/callback
+      - FRONTEND_URL=https://lostfound.example.com
+      # HTTPS 部署时取消注释
+      # - COOKIE_SECURE=true
+    volumes:
+      # SQLite 数据库持久化
+      - ./data:/app/server/data
+      # 上传图片持久化
+      - ./uploads:/app/server/uploads
