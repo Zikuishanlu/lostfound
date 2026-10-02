@@ -1,5 +1,7 @@
 # 拾光寻物 · Campus Lost & Found
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 面向校园社区的失物招领 / 寻物启事网站：发布寻物与招领信息，Campux 统一登录，审核员网页审核，并可将待审核稿件实时推送到 QQ 群（**SnowLuma**，兼容 OneBot 11）。界面为**简约毛玻璃（Glassmorphism）风格**。
 
 > 项目架构参考 [Whimsicalid/Lofo](https://github.com/Whimsicalid/Lofo) 重写，主要差异：
@@ -341,4 +343,6 @@ SnowLuma 作为 WebSocket **服务端**，本站主动连接过去（SnowLuma �
 
 ## 许可说明
 
-本项目架构参考 [Whimsicalid/Lofo](https://github.com/Whimsicalid/Lofo) 重写实现（Lofo 未附带开源许可证，使用前请遵循其仓库要求）。代码为本项目独立编写，仅作学习与校园社区使用。
+本项目代码基于 [MIT License](LICENSE) 开源：可自由使用、修改与分发，需保留版权声明。
+
+> 架构参考 [Whimsicalid/Lofo](https://github.com/Whimsicalid/Lofo)（该项目未附带开源许可证，其代码未被包含在本仓库中）。
