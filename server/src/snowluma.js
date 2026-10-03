@@ -16,6 +16,7 @@
 import { WebSocketServer, WebSocket as WS } from 'ws';
 import path from 'path';
 import fs from 'fs';
+import { config } from './config.js';
 import { uploadDir } from './upload.js';
 import {
   getAllSettings,
