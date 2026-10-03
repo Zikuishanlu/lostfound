@@ -1,13 +1,15 @@
 // Campux 对接模块 —— 审核通过后把稿件提交给 Campux，由 Campux 自身的
 // 发布管线（审核 → 机器人 → QZone Cookies）发表到 QQ 空间。
 //
-// 对接的是 Campux 开放 REST API（docs.campux.top，legacy /v1 接口）：
-//   1. POST /v1/account/login       {uin, passwd}             → JWT
-//   2. POST /v1/post/upload-image   multipart(image, suffix)  → {key}
-//   3. POST /v1/post/post-new       {uuid, text, anon, images}→ {id}
+// 对接的是 Campux 新版 Web API（github.com/idoknow/Campux，Fastify 版）：
+//   1. POST /api/auth/login  {account, password}          → Set-Cookie 会话
+//   2. GET  /api/me                                       → 会话校验（测试连接）
+//   3. POST /api/posts       multipart(text, anonymous, images[]) → {post:{id}}
 //
-// 不在本站重写 QZone 协议逻辑：投稿后是否需要审核、如何发说说、
-// 使用哪个机器人号，全部由 Campux 侧配置决定。
+// 新版没有独立图片上传接口：图片随投稿 multipart 一并上传（≤9 张）；
+// 也没有客户端幂等字段，网络重试可能产生重复投稿。
+// campux_api_base 必须填 Campux 主域名（单墙自托管）或目标校园墙自己的域名
+// （多租户按访问域名绑墙）；多墙账号登录会拿到 needsTenantSelection，直接报错。
 import fs from 'fs';
 import path from 'path';
 import { getAllSettings } from './db.js';
@@ -18,8 +20,19 @@ import { config } from './config.js';
 export const defaultCampuxTemplate =
   '【{站点名} #{编号}】{类型}\n{标题}\n\n{描述}\n\n📍 地点：{地点}\n💬 联系方式：{联系方式}\n🔗 详情：{链接}';
 
-// JWT 内存缓存（Campux 侧 token 有效期由其配置决定；过期后自动重登）
-let cachedToken = null;
+const SESSION_COOKIE = 'campux_session';
+
+// 文件扩展名 → multipart mimetype（新版服务端按 mimetype 校验图片类型）
+const MIME_BY_EXT = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  gif: 'image/gif',
+  webp: 'image/webp',
+};
+
+// 会话 Cookie 内存缓存（有效期 7 天；401 后自动重登）
+let cachedCookie = null;
 
 function apiBase() {
   const settings = getAllSettings();
@@ -31,67 +44,73 @@ function campuxConfigured() {
   return !!(settings.campux_api_base && settings.campux_uin && settings.campux_password);
 }
 
-// 解析 Campux 统一响应 {code, msg, data}
+// 新版响应是裸 JSON，错误为 HTTP 状态码 + {message}（无 {code,msg,data} 信封）
 async function parseCampuxResponse(response) {
   let json = null;
   try {
     json = await response.json();
   } catch { /* ignore */ }
   if (!response.ok) {
-    throw new Error(`Campux 接口 HTTP ${response.status}${json?.msg ? `：${json.msg}` : ''}`);
+    throw new Error(`Campux 接口 HTTP ${response.status}${json?.message ? `：${json.message}` : ''}`);
   }
-  if (!json || typeof json !== 'object') {
-    throw new Error('Campux 接口没有返回可解析的 JSON');
+  return json ?? {};
+}
+
+// 从 Set-Cookie 头提取 "campux_session=<token>"，后续请求原样放进 Cookie 头
+function extractSessionCookie(response) {
+  const setCookies = response.headers.getSetCookie?.() ?? [response.headers.get('set-cookie')].filter(Boolean);
+  for (const setCookie of setCookies) {
+    const pair = setCookie.split(';')[0].trim();
+    if (pair.startsWith(`${SESSION_COOKIE}=`) && pair.length > SESSION_COOKIE.length + 1) {
+      return pair;
+    }
   }
-  if (json.code !== 0) {
-    throw new Error(`Campux 接口错误：${json.msg || `code ${json.code}`}`);
-  }
-  return json.data ?? {};
+  throw new Error('Campux 登录成功但没有返回会话 Cookie');
 }
 
 async function login() {
   const settings = getAllSettings();
   const base = apiBase();
-  const response = await fetch(`${base}/v1/account/login`, {
+  const response = await fetch(`${base}/api/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      uin: settings.campux_uin || '',
-      passwd: settings.campux_password || '',
+      account: settings.campux_uin || '',
+      password: settings.campux_password || '',
     }),
   });
   const data = await parseCampuxResponse(response);
-  if (!data.token) {
-    throw new Error('Campux 登录成功但没有返回 token');
+  if (data.needsTenantSelection) {
+    throw new Error('Campux 账号属于多个校园墙，请把 Campux 服务地址填为具体校园墙的域名');
   }
-  cachedToken = data.token;
-  return cachedToken;
+  cachedCookie = extractSessionCookie(response);
+  return cachedCookie;
 }
 
-// 带 JWT 的请求；401 时自动重登一次
+// 带 Cookie 的请求；401 时自动重登一次
 async function authedFetch(path, options = {}, retry = true) {
   const base = apiBase();
-  if (!cachedToken) {
+  if (!cachedCookie) {
     await login();
   }
   const response = await fetch(`${base}${path}`, {
     ...options,
     headers: {
       ...(options.headers || {}),
-      Authorization: `Bearer ${cachedToken}`,
+      Cookie: cachedCookie,
     },
   });
   if (response.status === 401 && retry) {
-    cachedToken = null;
+    cachedCookie = null;
     return authedFetch(path, options, false);
   }
   return response;
 }
 
-// 测试连接：登录 + token 校验（管理后台按钮）
+// 测试连接：登录 + 会话校验（管理后台按钮）
 export async function testCampuxConnection() {
   await login();
-  const response = await authedFetch('/v1/account/token-check');
+  const response = await authedFetch('/api/me');
   await parseCampuxResponse(response);
   return { ok: true };
 }
@@ -104,32 +123,24 @@ export function getCampuxStatus() {
     configured: campuxConfigured(),
     apiBase: settings.campux_api_base || '',
     uin: settings.campux_uin || '',
-    loggedIn: !!cachedToken,
+    loggedIn: !!cachedCookie,
     template: settings.campux_text_template || defaultCampuxTemplate,
   };
 }
 
-// 上传物品图片到 Campux，返回附件 key
-async function uploadImage(item) {
+// 收集物品图片为 multipart 文件项（新版无独立上传接口，随投稿一起传）
+function collectItemImages(item) {
   if (!item.image_path) return [];
   const localFile = path.join(uploadDir, path.basename(item.image_path));
   if (!fs.existsSync(localFile)) return [];
 
   const ext = path.extname(item.image_path).toLowerCase().replace('.', '') || 'jpg';
+  const mime = MIME_BY_EXT[ext] || 'application/octet-stream';
   const bytes = fs.readFileSync(localFile);
-  const form = new FormData();
-  form.append('image', new Blob([bytes]), `item-${item.id}.${ext}`);
-  form.append('suffix', ext);
-
-  const response = await authedFetch('/v1/post/upload-image', {
-    method: 'POST',
-    body: form,
-  });
-  const data = await parseCampuxResponse(response);
-  if (!data.key) {
-    throw new Error('Campux 图片上传成功但没有返回附件 key');
-  }
-  return [data.key];
+  return [{
+    blob: new Blob([bytes], { type: mime }),
+    filename: `item-${item.id}.${ext}`,
+  }];
 }
 
 // 用文案模板渲染投稿正文
@@ -152,23 +163,24 @@ function renderTemplate(template, item) {
   return output;
 }
 
-// 把稿件作为投稿提交给 Campux（uuid 用于 Campux 侧幂等）
+// 把稿件作为投稿提交给 Campux（新版无幂等字段，重试可能重复提交）
 async function submitToCampux(item) {
   const text = renderTemplate(getAllSettings().campux_text_template || defaultCampuxTemplate, item);
-  const images = await uploadImage(item);
+  const form = new FormData();
+  form.append('text', text);
+  form.append('anonymous', 'false');
 
-  const response = await authedFetch('/v1/post/post-new', {
+  const images = collectItemImages(item).slice(0, 9);
+  for (const image of images) {
+    form.append('images', image.blob, image.filename);
+  }
+
+  const response = await authedFetch('/api/posts', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      uuid: `lostfound-item-${item.id}`,
-      text,
-      anon: false,
-      images,
-    }),
+    body: form,
   });
   const data = await parseCampuxResponse(response);
-  return { postId: data.id ?? null, images: images.length };
+  return { postId: data.post?.id ?? null, images: images.length };
 }
 
 // 审核通过后触发：检查开关与配置，把稿件提交给 Campux。

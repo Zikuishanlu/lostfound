@@ -5,3 +5,4 @@ server/uploads/
 web/dist/
 *.log
 .DS_Store
+graphify-out/ 
