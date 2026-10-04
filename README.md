@@ -31,7 +31,7 @@
 | 数据库 | SQLite（文件位于 `server/data/lostfound.db`，WAL 模式） |
 | 认证 | Campux OAuth2 + PKCE |
 | 通知 | SnowLuma / OneBot 11（反向：本站作 WS 服务端；正向：本站作 WS 客户端） |
-| QQ 空间发布 | 对接 Campux 开放 REST API（登录 → 传图 → 投稿），由 Campux 完成空间发布 |
+| QQ 空间发布 | 对接新版 Campux Web API（会话登录 → 投稿），由 Campux 完成空间发布 |
 
 ## 目录结构
 
@@ -270,29 +270,31 @@ SnowLuma 作为 WebSocket **服务端**，本站主动连接过去（SnowLuma �
 
 # 五、QQ 空间发布：对接 Campux（不用重写）
 
-审核通过后，本站把稿件（含图片）**投稿到你已有的 Campux**，由 Campux 自己的发布管线（审核 → 机器人 → QZone 登录态）发表到 QQ 空间。本站只负责「登录 Campux → 上传图片 → 提交稿件」三步 REST 调用，不实现任何 QZone 协议逻辑。
+审核通过后，本站把稿件（含图片）**投稿到你已有的 Campux**，由 Campux 自己的发布管线（审核 → 机器人 → QZone 登录态）发表到 QQ 空间。本站只负责「登录 Campux → 提交稿件（图片随稿一并上传）」两步调用，不实现任何 QZone 协议逻辑。
+
+> **版本要求**：需要**新版 Campux**（[idoknow/Campux](https://github.com/idoknow/Campux)，Fastify 版）。本站调用其 `/api` Web 接口；旧版 Go 版（`/v1` legacy 接口）与本站不再兼容。
 
 配置入口：**管理后台 → 系统设置 → Campux 对接**。
 
 ## 5.1 前置：在 Campux 侧准备一个投稿账号
 
-1. 在你的 Campux 站点注册（或让管理员创建）一个账号，建议直接用**机器人 QQ 号**注册，角色为「成员」即可。
+1. 在你的 Campux 站点注册（或让管理员创建）一个账号，建议直接用**机器人 QQ 号**注册，角色为「成员」即可（需有投稿权限）。
 2. 确认 Campux 侧发布链路可用：机器人已接入、QZone 登录态有效（Campux 后台可查）；稿件是否需要在 Campux 内再次审核，取决于 Campux 的「自动过审」配置。
 
 ## 5.2 本站配置
 
 | 配置项 | 填什么 |
 |--------|--------|
-| Campux 服务地址 | 如 `https://campux.example.com`（不带末尾斜杠） |
+| Campux 服务地址 | 如 `https://campux.example.com`（不带末尾斜杠）；多租户部署填目标校园墙自己的域名（按访问域名绑墙） |
 | 投稿账号（QQ 号） | 上一步注册的账号 |
-| 账号密码 | 对应密码，本站用它登录 Campux 换取 JWT（内存缓存，过期自动重登） |
+| 账号密码 | 对应密码，本站用它登录 Campux 建立会话（Cookie 内存缓存，过期自动重登） |
 
-填好后点击 **「测试连接」**（会真实登录一次并校验 token），通过后打开「审核通过后提交到 Campux」开关并**保存设置**。
+填好后点击 **「测试连接」**（会真实登录一次并校验会话），通过后打开「审核通过后提交到 Campux」开关并**保存设置**。
 
 ## 5.3 行为说明
 
 - 触发时机：**网页审核通过 / QQ 群内审核通过 / 免审核直发**，三处均会投稿；归档稿件不投稿。
-- 投稿内容：文案模板渲染的正文 + 稿件图片（先调 Campux 上传接口，再以附件 key 投稿）；`uuid` 固定为 `lostfound-item-<稿件id>`，Campux 侧幂等。
+- 投稿内容：文案模板渲染的正文 + 稿件图片（图片随投稿 multipart 一并上传，最多 9 张）；新版接口无客户端幂等字段，提交失败后请勿在短时间内反复手动重试。
 - 文案模板占位符：`{站点名} {编号} {类型} {标题} {描述} {地点} {联系方式} {链接}`，留空用默认模板。
 - 失败处理：提交失败**不影响审核**，仅在服务端日志记录（`[Campux]` 前缀）；常见原因：地址不通、账号密码错误、Campux 侧稿件数超限。
 
@@ -301,7 +303,7 @@ SnowLuma 作为 WebSocket **服务端**，本站主动连接过去（SnowLuma �
 | 现象 | 原因 |
 |------|------|
 | 测试连接报「账号或密码错误」 | Campux 账号密码不对，或该账号已被封禁 |
-| 测试连接报 HTTP 404 | 服务地址写错（多了路径/末尾斜杠），或 Campux 版本过老无 `/v1` 接口 |
+| 测试连接报 HTTP 404 | 服务地址写错（多了路径/末尾斜杠），或 Campux 不是新版（本站调用新版 `/api` 接口，旧版 Go 版无此接口） |
 | 已提交但空间没动态 | Campux 侧未自动过审（去 Campux 后台审核），或 Campux 机器人 / QZone 登录态失效 |
 | 说说无图 | 稿件未上传图片，或服务器上图片文件缺失 |
 
@@ -327,7 +329,7 @@ SnowLuma 作为 WebSocket **服务端**，本站主动连接过去（SnowLuma �
 | GET/PUT | `/api/admin/...` | admin | 用户 / 设置 / 统计 |
 | GET | `/api/admin/snowluma-status` | admin | SnowLuma 连接状态 |
 | GET | `/api/admin/campux-status` | admin | Campux 对接状态 |
-| POST | `/api/admin/campux/test` | admin | 测试 Campux 连接（登录 + token 校验） |
+| POST | `/api/admin/campux/test` | admin | 测试 Campux 连接（登录 + 会话校验） |
 
 ---
 
